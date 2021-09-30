@@ -15,10 +15,10 @@
                 "description": "Azure AD Group in the identified tenant that will be granted the highly privileged cluster-admin role. If Azure RBAC is used, then this group will get a role assignment to Azure RBAC, else it will be assigned directly to the cluster's admin group."
             }
         },
-        "a0008NamespaceReaderAadGroupObjectId": {
+        "a1212NamespaceReaderAadGroupObjectId": {
             "type": "string",
             "metadata": {
-                "description": "Azure AD Group in the identified tenant that will be granted the read only privileges in the a0008 namespace that exists in the cluster. This is only used when Azure RBAC is used for Kubernetes RBAC."
+                "description": "Azure AD Group in the identified tenant that will be granted the read only privileges in the a1212 namespace that exists in the cluster. This is only used when Azure RBAC is used for Kubernetes RBAC."
             }
         },
         "k8sControlPlaneAuthorizationTenantId": {
@@ -46,8 +46,19 @@
                 "description": "IP ranges authorized to contact the Kubernetes API server. Passing an empty array will result in no IP restrictions. If any are provided, remember to also provide the public IP of the egress Azure Firewall otherwise your nodes will not be able to talk to the API server (e.g. Flux)."
             }
         },
+        "keyVaultResourceId": {
+            "type": "string",
+            "metadata": {
+                "description": "The Key Vault used to store workload secrets"
+            }
+        },
+        "containerRegistryResourceId": {
+            "type": "string",
+            "metadata": {
+                "description": "The Container Registry used to store workload images"
+            }
+        },
         "location": {
-            "defaultValue": "eastus2",
             "type": "string",
             "allowedValues": [
                 "australiaeast",
@@ -70,49 +81,22 @@
                 "description": "AKS Service, Node Pool, and supporting services (KeyVault, App Gateway, etc) region. This needs to be the same region as the vnet provided in these parameters."
             }
         },
-        "geoRedundancyLocation": {
-            "defaultValue": "centralus",
-            "type": "string",
-            "allowedValues": [
-                "australiasoutheast",
-                "canadaeast",
-                "eastus2",
-                "westus",
-                "centralus",
-                "westcentralus",
-                "francesouth",
-                "germanynorth",
-                "westeurope",
-                "ukwest",
-                "northeurope",
-                "japanwest",
-                "southafricawest",
-                "northcentralus",
-                "eastasia",
-                "eastus",
-                "westus2",
-                "francecentral",
-                "uksouth",
-                "japaneast",
-                "southeastasia"
-            ],
-            "metadata": {
-                "description": "For Azure resources that support native geo-redunancy, provide the location the redundant service will have its secondary. Should be different than the location parameter and ideally should be a paired region - https://docs.microsoft.com/azure/best-practices-availability-paired-regions. This region does not need to support availability zones."
-            }
-        },
         "kubernetesVersion": {
             "defaultValue": "1.21.2",
             "type": "string"
         },
         "domainName": {
             "type": "string",
-            "defaultValue": "contoso.com",
+            "defaultValue": "fabrikam.com",
             "metadata": {
                 "description": "Domain name to use for App Gateway and AKS ingress."
             }
         }
     },
     "variables": {
+        "clusterRgName": "[resourceGroup().Name]",
+        "clusterSubId": "[split(subscription().Id, '/')[2]]",
+
         "networkContributorRole": "[concat(subscription().Id, '/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7')]",
         "monitoringMetricsPublisherRole": "[concat(subscription().Id, '/providers/Microsoft.Authorization/roleDefinitions/3913510d-42f4-4e42-8a64-420c390055eb')]",
         "acrPullRole": "[concat(subscription().Id, '/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
@@ -129,7 +113,6 @@
         "clusterName": "[concat('aks-', variables('subRgUniqueString'))]",
         "logAnalyticsWorkspaceName": "[concat('la-', variables('clusterName'))]",
         "containerInsightsSolutionName": "[concat('ContainerInsights(', variables('logAnalyticsWorkspaceName'),')')]",
-        "defaultAcrName": "[concat('acraks', variables('subRgUniqueString'))]",
 
         "vNetResourceGroup": "[split(parameters('targetVnetResourceId'),'/')[4]]",
         "vnetName": "[split(parameters('targetVnetResourceId'),'/')[8]]",
@@ -138,15 +121,18 @@
 
         "agwName": "[concat('apw-', variables('clusterName'))]",
 
-        "acrPrivateDnsZonesName": "privatelink.azurecr.io",
-        "akvPrivateDnsZonesName": "privatelink.vaultcore.azure.net",
-
         "clusterControlPlaneIdentityName": "[concat('mi-', variables('clusterName'), '-controlplane')]",
 
-        "keyVaultName": "[concat('kv-', variables('clusterName'))]",
+        "keyVaultSubId": "[split(parameters('keyVaultResourceId'),'/')[2]]",
+        "keyVaultRgName": "[split(parameters('keyVaultResourceId'),'/')[4]]",
+        "keyVaultName": "[split(parameters('keyVaultResourceId'),'/')[8]]",
+
+        "acrSubId": "[split(parameters('containerRegistryResourceId'),'/')[2]]",
+        "acrRgName": "[split(parameters('containerRegistryResourceId'),'/')[4]]",
+        "acrName": "[split(parameters('containerRegistryResourceId'),'/')[8]]",
 
         "aksIngressDomainName": "[concat('aks-ingress.', parameters('domainName'))]",
-        "aksBackendDomainName": "[concat('bu0001a0008-00.', variables('aksIngressDomainName'))]",
+        "aksBackendDomainName": "[concat('bu0001a1212-00.', variables('aksIngressDomainName'))]",
 
         "policyResourceIdAKSLinuxRestrictive": "/providers/Microsoft.Authorization/policySetDefinitions/42b8ef37-b724-4e24-bbc8-7a7708edfe00",
         "policyResourceIdEnforceHttpsIngress": "/providers/Microsoft.Authorization/policyDefinitions/1a5b4dca-0b6f-4cf5-907c-56316bc1bf3d",
@@ -185,292 +171,92 @@
             "comments": "User Managed Identity for the cluster's ingress controller pods. Used for Azure Key Vault Access."
         },
         {
-            "type": "Microsoft.KeyVault/vaults",
-            "apiVersion": "2021-06-01-preview",
-            "name": "[variables('keyVaultName')]",
-            "location": "[parameters('location')]",
-            "dependsOn": [
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'mi-appgateway-frontend')]",
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'podmi-ingress-controller')]"
-            ],
+            "apiVersion": "2017-05-10",
+            "name": "keyVaultSecrets",
+            "type": "Microsoft.Resources/deployments",
+            "resourceGroup": "[variables('keyVaultRgName')]",
+            "subscriptionId": "[variables('keyVaultSubId')]",
             "properties": {
-                "accessPolicies": [], // Azure RBAC is used instead
-                "sku": {
-                    "family": "A",
-                    "name": "standard"
-                },
-                "tenantId": "[subscription().tenantId]",
-                "networkAcls": {
-                    "bypass": "AzureServices", // Required for AppGW communication
-                    "defaultAction": "Deny",
-                    "ipRules": [],
-                    "virtualNetworkRules": []
-                },
-                "enableRbacAuthorization": true,
-                "enabledForDeployment": false,
-                "enabledForDiskEncryption": false,
-                "enabledForTemplateDeployment": false,
-                "enableSoftDelete": true
-            },
-            "resources": [
-                {
-                    "type": "secrets",
-                    "apiVersion": "2021-06-01-preview",
-                    "name": "gateway-public-cert",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName') )]"
-                    ],
-                    "properties": {
-                        "value": "[parameters('appGatewayListenerCertificate')]"
-                    }
-                },
-                {
-                    "type": "secrets",
-                    "apiVersion": "2021-06-01-preview",
-                    "name": "appgw-ingress-internal-aks-ingress-tls",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
-                    ],
-                    "properties": {
-                        "value": "[parameters('aksIngressControllerCertificate')]"
-                    }
-                },
-                {
-                    "type": "providers/diagnosticSettings",
-                    "apiVersion": "2017-05-01-preview",
-                    "name": "Microsoft.Insights/default",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-                        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsWorkspaceName'))]"
-                    ],
-                    "properties": {
-                        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsWorkspaceName'))]",
-                        "logs": [
-                            {
-                                "category": "AuditEvent",
-                                "enabled": true
+                "mode": "Incremental",
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {},
+                    "variables": {},
+                    "resources": [
+                        {
+                            "type": "Microsoft.KeyVault/vaults/secrets",
+                            "apiVersion": "2021-06-01-preview",
+                            "name": "[concat(variables('keyVaultName'), '/gateway-public-cert')]",
+                            "properties": {
+                                "value": "[parameters('appGatewayListenerCertificate')]"
                             }
-                        ],
-                        "metrics": [
-                            {
-                                "category": "AllMetrics",
-                                "enabled": true
+                        },
+                        {
+                            "type": "Microsoft.KeyVault/vaults/secrets",
+                            "apiVersion": "2021-06-01-preview",
+                            "name": "[concat(variables('keyVaultName'), '/appgw-ingress-internal-aks-ingress-tls')]",
+                            "properties": {
+                                "value": "[parameters('aksIngressControllerCertificate')]"
                             }
-                        ]
-                    }
-                },
-                {
-                    "type": "providers/roleAssignments",
-                    "apiVersion": "2018-09-01-preview",
-                    "name": "[concat('Microsoft.Authorization/', guid(resourceGroup().id, 'mi-appgateway-frontend', variables('keyVaultSecretsUserRole')))]",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'mi-appgateway-frontend')]"
-                    ],
-                    "comments": "Grant the Azure Application Gateway managed identity with key vault reader role permissions; this allows pulling frontend and backend certificates.",
-                    "properties": {
-                        "roleDefinitionId": "[variables('keyVaultSecretsUserRole')]",
-                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'mi-appgateway-frontend')).principalId]",
-                        "principalType": "ServicePrincipal"
-                    }
-                },
-                {
-                    "type": "providers/roleAssignments",
-                    "apiVersion": "2018-09-01-preview",
-                    "name": "[concat('Microsoft.Authorization/', guid(resourceGroup().id, 'mi-appgateway-frontend', variables('keyVaultReader')))]",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'mi-appgateway-frontend')]"
-                    ],
-                    "comments": "Grant the Azure Application Gateway managed identity with key vault reader role permissions; this allows pulling frontend and backend certificates.",
-                    "properties": {
-                        "roleDefinitionId": "[variables('keyVaultReader')]",
-                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'mi-appgateway-frontend')).principalId]",
-                        "principalType": "ServicePrincipal"
-                    }
-                },
-                {
-                    "type": "providers/roleAssignments",
-                    "apiVersion": "2018-09-01-preview",
-                    "name": "[concat('Microsoft.Authorization/', guid(resourceGroup().id, 'podmi-ingress-controller', variables('keyVaultSecretsUserRole')))]",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'podmi-ingress-controller')]"
-                    ],
-                    "comments": "Grant the AKS cluster ingress controller pod managed identity with key vault reader role permissions; this allows our ingress controller to pull certificates.",
-                    "properties": {
-                        "roleDefinitionId": "[variables('keyVaultSecretsUserRole')]",
-                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'podmi-ingress-controller')).principalId]",
-                        "principalType": "ServicePrincipal"
-                    }
-                },
-                {
-                    "type": "providers/roleAssignments",
-                    "apiVersion": "2018-09-01-preview",
-                    "name": "[concat('Microsoft.Authorization/', guid(resourceGroup().id, 'podmi-ingress-controller', variables('keyVaultReader')))]",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'podmi-ingress-controller')]"
-                    ],
-                    "comments": "Grant the AKS cluster ingress controller pod managed identity with key vault reader role permissions; this allows our ingress controller to pull certificates.",
-                    "properties": {
-                        "roleDefinitionId": "[variables('keyVaultReader')]",
-                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', 'podmi-ingress-controller')).principalId]",
-                        "principalType": "ServicePrincipal"
-                    }
-                }
-            ]
-        },
-        {
-            "type": "Microsoft.Network/privateEndpoints",
-            "apiVersion": "2020-05-01",
-            "name": "nodepools-to-akv",
-            "location": "[parameters('location')]",
-            "dependsOn": [
-                "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
-            ],
-            "properties": {
-                "subnet": {
-                    "id": "[variables('vnetNodePoolSubnetResourceId')]"
-                },
-                "privateLinkServiceConnections": [
-                    {
-                        "name": "nodepools",
-                        "properties": {
-                            "privateLinkServiceId": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-                            "groupIds": [
-                                "vault"
-                            ]
+                        },
+                        {
+                            "type": "Microsoft.KeyVault/vaults/providers/roleAssignments",
+                            "apiVersion": "2018-09-01-preview",
+                            "name": "[concat(variables('keyVaultName'), '/Microsoft.Authorization/', guid(resourceGroup().id, 'mi-appgateway-frontend', variables('keyVaultSecretsUserRole')))]",
+                            "comments": "Grant the Azure Application Gateway managed identity with key vault reader role permissions; this allows pulling frontend and backend certificates.",
+                            "properties": {
+                                "roleDefinitionId": "[variables('keyVaultSecretsUserRole')]",
+                                "principalId": "[reference(resourceId(variables('clusterSubId'), variables('clusterRgName'), 'Microsoft.ManagedIdentity/userAssignedIdentities', 'mi-appgateway-frontend')).principalId]",
+                                "principalType": "ServicePrincipal",
+                                "scope": "[parameters('keyVaultResourceId')]"
+                            }
+                        },
+                        {
+                            "type": "Microsoft.KeyVault/vaults/providers/roleAssignments",
+                            "apiVersion": "2018-09-01-preview",
+                            "name": "[concat(variables('keyVaultName'), '/Microsoft.Authorization/', guid(resourceGroup().id, 'mi-appgateway-frontend', variables('keyVaultReader')))]",
+                            "comments": "Grant the Azure Application Gateway managed identity with key vault reader role permissions; this allows pulling frontend and backend certificates.",
+                            "properties": {
+                                "roleDefinitionId": "[variables('keyVaultReader')]",
+                                "principalId": "[reference(resourceId(variables('clusterSubId'), variables('clusterRgName'), 'Microsoft.ManagedIdentity/userAssignedIdentities', 'mi-appgateway-frontend')).principalId]",
+                                "principalType": "ServicePrincipal",
+                                "scope": "[parameters('keyVaultResourceId')]"
+                            }
+                        },
+                        {
+                            "type": "Microsoft.KeyVault/vaults/providers/roleAssignments",
+                            "apiVersion": "2018-09-01-preview",
+                            "name": "[concat(variables('keyVaultName'), '/Microsoft.Authorization/', guid(resourceGroup().id, 'podmi-ingress-controller', variables('keyVaultSecretsUserRole')))]",
+                            "comments": "Grant the AKS cluster ingress controller pod managed identity with key vault reader role permissions; this allows our ingress controller to pull certificates.",
+                            "properties": {
+                                "roleDefinitionId": "[variables('keyVaultSecretsUserRole')]",
+                                "principalId": "[reference(resourceId(variables('clusterSubId'), variables('clusterRgName'), 'Microsoft.ManagedIdentity/userAssignedIdentities', 'podmi-ingress-controller')).principalId]",
+                                "principalType": "ServicePrincipal",
+                                "scope": "[parameters('keyVaultResourceId')]"
+                            }
+                        },
+                        {
+                            "type": "Microsoft.KeyVault/vaults/providers/roleAssignments",
+                            "apiVersion": "2018-09-01-preview",
+                            "name": "[concat(variables('keyVaultName'), '/Microsoft.Authorization/', guid(resourceGroup().id, 'podmi-ingress-controller', variables('keyVaultReader')))]",
+                            "comments": "Grant the AKS cluster ingress controller pod managed identity with key vault reader role permissions; this allows our ingress controller to pull certificates.",
+                            "properties": {
+                                "roleDefinitionId": "[variables('keyVaultReader')]",
+                                "principalId": "[reference(resourceId(variables('clusterSubId'), variables('clusterRgName'), 'Microsoft.ManagedIdentity/userAssignedIdentities', 'podmi-ingress-controller')).principalId]",
+                                "principalType": "ServicePrincipal",
+                                "scope": "[parameters('keyVaultResourceId')]"
+                            }
                         }
-                    }
-                ]
-            },
-            "resources": [
-                {
-                    "type": "privateDnsZoneGroups",
-                    "apiVersion": "2020-05-01",
-                    "name": "default",
-                    "location": "[parameters('location')]",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/privateEndpoints', 'nodepools-to-akv')]",
-                        "[resourceId('Microsoft.Network/privateDnsZones', variables('akvPrivateDnsZonesName'))]"
-                    ],
-                    "properties": {
-                        "privateDnsZoneConfigs": [
-                            {
-                                "name": "privatelink-akv-net",
-                                "properties": {
-                                    "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('akvPrivateDnsZonesName'))]"
-                                }
-                            }
-                        ]
-                    }
+                    ]
                 }
-            ]
-        },
-{
-            "type": "Microsoft.Network/privateDnsZones",
-            "apiVersion": "2020-06-01",
-            "name": "[variables('acrPrivateDnsZonesName')]",
-            "location": "global",
-            "comments": "Enabling Azure Container Registry Private Link on vnet.",
-            "properties": {},
-            "resources": [
-                {
-                    "type": "virtualNetworkLinks",
-                    "apiVersion": "2020-06-01",
-                    "name": "[concat('to_', variables('vnetName'))]",
-                    "location": "global",
-                    "comments": "Enabling cluster vnet private zone DNS lookup - used by cluster vnet for direct DNS queries (ones not proxied via the hub).",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/privateDnsZones', variables('acrPrivateDnsZonesName'))]"
-                    ],
-                    "properties": {
-                        "virtualNetwork": {
-                            "id": "[parameters('targetVnetResourceId')]"
-                        },
-                        "registrationEnabled": false
-                    }
-                }
-            ]
-        },
-        {
-            "type": "Microsoft.Network/privateDnsZones",
-            "apiVersion": "2018-09-01",
-            "name": "[variables('akvPrivateDnsZonesName')]",
-            "location": "global",
-            "comments": "Enabling Azure Key Vault Private Link support.",
-            "properties": {},
-            "resources": [
-                {
-                    "type": "virtualNetworkLinks",
-                    "apiVersion": "2020-06-01",
-                    "name": "[concat('to_', variables('vnetName'))]",
-                    "location": "global",
-                    "comments": "Enabling Azure Key Vault Private Link on cluster vnet.",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/privateDnsZones', variables('akvPrivateDnsZonesName'))]"
-                    ],
-                    "properties": {
-                        "virtualNetwork": {
-                            "id": "[parameters('targetVnetResourceId')]"
-                        },
-                        "registrationEnabled": false
-                    }
-                }
-            ]
-        },
-        {
-            "type": "Microsoft.Network/privateDnsZones",
-            "apiVersion": "2018-09-01",
-            "name": "[variables('aksIngressDomainName')]",
-            "location": "global",
-            "properties": {},
-            "resources": [
-                {
-                    "type": "A",
-                    "apiVersion": "2018-09-01",
-                    "name": "bu0001a0008-00",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/privateDnsZones', variables('aksIngressDomainName'))]"
-                    ],
-                    "properties": {
-                        "ttl": 3600,
-                        "aRecords": [
-                            {
-                                "ipv4Address": "10.240.4.4"
-                            }
-                        ]
-                    }
-                },
-                {
-                    "type": "virtualNetworkLinks",
-                    "apiVersion": "2020-06-01",
-                    "name": "[concat('to_', variables('vnetName'))]",
-                    "location": "global",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/privateDnsZones', variables('aksIngressDomainName'))]"
-                    ],
-                    "properties": {
-                        "virtualNetwork": {
-                            "id": "[parameters('targetVnetResourceId')]"
-                        },
-                        "registrationEnabled": false
-                    }
-                }
-            ]
+            }
         },
         {
             "type": "Microsoft.Network/applicationGateways",
             "apiVersion": "2020-05-01",
             "name": "[variables('agwName')]",
             "location": "[parameters('location')]",
-            "dependsOn": [
-                "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
-                "[resourceId('Microsoft.Network/privateEndpoints', 'nodepools-to-akv')]",
-                "[resourceId('Microsoft.KeyVault/vaults/providers/roleAssignments', variables('keyVaultName'), 'Microsoft.Authorization', guid(resourceGroup().id, 'mi-appgateway-frontend', variables('keyVaultReader')))]",
-                "[resourceId('Microsoft.KeyVault/vaults/providers/roleAssignments', variables('keyVaultName'), 'Microsoft.Authorization', guid(resourceGroup().id, 'mi-appgateway-frontend', variables('keyVaultSecretsUserRole')))]"
-            ],
             "identity": {
                 "type": "UserAssigned",
                 "userAssignedIdentities": {
@@ -495,7 +281,7 @@
                     {
                         "name": "root-cert-wildcard-aks-ingress",
                         "properties": {
-                            "keyVaultSecretId": "[concat(reference(variables('keyVaultName')).vaultUri,'secrets/appgw-ingress-internal-aks-ingress-tls')]"
+                            "keyVaultSecretId": "[concat(reference(parameters('keyVaultResourceId'), '2021-06-01-preview').vaultUri,'secrets/appgw-ingress-internal-aks-ingress-tls')]"
                         }
                     }
                 ],
@@ -505,16 +291,6 @@
                         "properties": {
                             "subnet": {
                                 "id": "[concat(parameters('targetVnetResourceId'), '/subnets/snet-applicationgateway')]"
-                            }
-                        }
-                    }
-                ],
-                "frontendIPConfigurations": [
-                    {
-                        "name": "apw-frontend-ip-configuration",
-                        "properties": {
-                            "PublicIPAddress": {
-                                "id": "[resourceId(subscription().subscriptionId, variables('vNetResourceGroup'), 'Microsoft.Network/publicIpAddresses', 'pip-BU0001A0008-00')]"
                             }
                         }
                     }
@@ -545,7 +321,7 @@
                     {
                         "name": "[concat(variables('agwName'), '-ssl-certificate')]",
                         "properties": {
-                            "keyVaultSecretId": "[concat(reference(variables('keyVaultName')).vaultUri,'secrets/gateway-public-cert')]"
+                            "keyVaultSecretId": "[concat(reference(parameters('keyVaultResourceId'), '2021-06-01-preview').vaultUri,'secrets/gateway-public-cert')]"
                         }
                     }
                 ],
@@ -601,9 +377,6 @@
                     {
                         "name": "listener-https",
                         "properties": {
-                            "frontendIPConfiguration": {
-                                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', variables('agwName'), 'apw-frontend-ip-configuration')]"
-                            },
                             "frontendPort": {
                                 "id": "[resourceId('Microsoft.Network/applicationGateways/frontendPorts', variables('agwName'), 'port-443')]"
                             },
@@ -896,143 +669,33 @@
             }
         },
         {
-            "type": "Microsoft.ContainerRegistry/registries",
-            "apiVersion": "2020-11-01-preview",
-            "name": "[variables('defaultAcrName')]",
-            "location": "[parameters('location')]",
-            "sku": {
-                "name": "Premium"
-            },
+            "apiVersion": "2017-05-10",
+            "name": "acrPermissions",
+            "type": "Microsoft.Resources/deployments",
+            "resourceGroup": "[variables('acrRgName')]",
+            "subscriptionId": "[variables('acrSubId')]",
             "properties": {
-                "adminUserEnabled": false,
-                "networkRuleSet": {
-                    "defaultAction": "Deny",
-                    "virtualNetworkRules": [],
-                    "ipRules": []
-                },
-                "policies": {
-                    "quarantinePolicy": {
-                        "status": "disabled"
-                    },
-                    "trustPolicy": {
-                        "type": "Notary",
-                        "status": "disabled"
-                    },
-                    "retentionPolicy": {
-                        "days": 15,
-                        "status": "enabled"
-                    }
-                },
-                "publicNetworkAccess": "Disabled",
-                "encryption": {
-                    "status": "disabled"
-                },
-                "dataEndpointEnabled": true,
-                "networkRuleBypassOptions": "AzureServices",
-                "zoneRedundancy": "Disabled" // This Preview feature only supports three regions at this time, and eastus2's paired region (centralus), does not support this. So disabling for now.
-            },
-            "resources": [
-                {
-                    "name": "[concat('Microsoft.Authorization/', guid(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), variables('acrPullRole')))]",
-                    "type": "providers/roleAssignments",
-                    "apiVersion": "2020-04-01-preview",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.ContainerRegistry/registries', variables('defaultAcrName'))]",
-                        "[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]"
-                    ],
-                    "properties": {
-                        "roleDefinitionId": "[variables('acrPullRole')]",
-                        "principalId": "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2020-12-01').identityProfile.kubeletidentity.objectId]",
-                        "principalType": "ServicePrincipal"
-                    }
-                },
-                {
-                    "type": "replications",
-                    "apiVersion": "2019-05-01",
-                    "name": "[parameters('geoRedundancyLocation')]",
-                    "location": "[parameters('geoRedundancyLocation')]",
-                    "dependsOn": [
-                        "[variables('defaultAcrName')]"
-                    ],
-                    "properties": {}
-                },
-                {
-                    "type": "providers/diagnosticSettings",
-                    "apiVersion": "2017-05-01-preview",
-                    "name": "Microsoft.Insights/default",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.ContainerRegistry/registries', variables('defaultAcrName'))]",
-                        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsWorkspaceName'))]"
-                    ],
-                    "properties": {
-                        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsWorkspaceName'))]",
-                        "metrics": [
-                            {
-                                "timeGrain": "PT1M",
-                                "category": "AllMetrics",
-                                "enabled": true
+                "mode": "Incremental",
+                "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {},
+                    "variables": {},
+                    "resources": [
+                        {
+                            "name": "[concat(variables('acrName'), '/Microsoft.Authorization/', guid(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), variables('acrPullRole')))]",
+                            "type": "Microsoft.ContainerRegistry/registries/providers/roleAssignments",
+                            "apiVersion": "2020-04-01-preview",
+                            "properties": {
+                                "roleDefinitionId": "[variables('acrPullRole')]",
+                                "principalId": "[reference(resourceId(variables('clusterSubId'), variables('clusterRgName'), 'Microsoft.ContainerService/managedClusters', variables('clusterName')), '2020-12-01').identityProfile.kubeletidentity.objectId]",
+                                "principalType": "ServicePrincipal",
+                                "scope": "[parameters('containerRegistryResourceId')]"
                             }
-                        ],
-                        "logs": [
-                            {
-                                "category": "ContainerRegistryRepositoryEvents",
-                                "enabled": true
-                            },
-                            {
-                                "category": "ContainerRegistryLoginEvents",
-                                "enabled": true
-                            }
-                        ]
-                    }
-                }
-            ]
-        },
-        {
-            "type": "Microsoft.Network/privateEndpoints",
-            "apiVersion": "2020-05-01",
-            "name": "nodepool-to-acr",
-            "location": "[parameters('location')]",
-            "dependsOn": [
-                "[resourceId('Microsoft.ContainerRegistry/registries/replications', variables('defaultAcrName'), parameters('geoRedundancyLocation'))]"
-            ],
-            "properties": {
-                "subnet": {
-                    "id": "[variables('vnetNodePoolSubnetResourceId')]"
-                },
-                "privateLinkServiceConnections": [
-                    {
-                        "name": "nodepools",
-                        "properties": {
-                            "privateLinkServiceId": "[resourceId('Microsoft.ContainerRegistry/registries', variables('defaultAcrName'))]",
-                            "groupIds": [
-                                "registry"
-                            ]
                         }
-                    }
-                ]
-            },
-            "resources": [
-                {
-                    "type": "privateDnsZoneGroups",
-                    "apiVersion": "2020-05-01",
-                    "name": "default",
-                    "location": "[parameters('location')]",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/privateEndpoints', 'nodepool-to-acr')]",
-                        "[resourceId('Microsoft.Network/privateDnsZones', variables('acrPrivateDnsZonesName'))]"
-                    ],
-                    "properties": {
-                        "privateDnsZoneConfigs": [
-                            {
-                                "name": "privatelink-azurecr-io",
-                                "properties": {
-                                    "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('acrPrivateDnsZonesName'))]"
-                                }
-                            }
-                        ]
-                    }
+                    ]
                 }
-            ]
+            }
         },
         {
             "type": "Microsoft.ContainerService/managedClusters",
@@ -1041,7 +704,7 @@
             "location": "[parameters('location')]",
             "tags": {
                 "Business unit": "BU0001",
-                "Application identifier": "a0008"
+                "Application identifier": "a1212"
             },
             "dependsOn": [
                 "[resourceId('Microsoft.OperationsManagement/solutions', variables('containerInsightsSolutionName'))]",
@@ -1052,10 +715,7 @@
                 "[resourceId('Microsoft.Authorization/policyAssignments', variables('policyAssignmentNameEnforceImageSource'))]",
                 "[resourceId('Microsoft.Authorization/policyAssignments', variables('policyAssignmentNameEnforceInternalLoadBalancers'))]",
                 "[resourceId('Microsoft.Authorization/policyAssignments', variables('policyAssignmentNameEnforceResourceLimits'))]",
-                "[resourceId('Microsoft.Authorization/policyAssignments', variables('policyAssignmentNameRoRootFilesystem'))]",
-                "[resourceId('Microsoft.Network/privateEndpoints', 'nodepools-to-akv')]",
-                "[resourceId('Microsoft.KeyVault/vaults/providers/roleAssignments', variables('keyVaultName'), 'Microsoft.Authorization', guid(resourceGroup().id, 'podmi-ingress-controller', variables('keyVaultReader')))]",
-                "[resourceId('Microsoft.KeyVault/vaults/providers/roleAssignments', variables('keyVaultName'), 'Microsoft.Authorization', guid(resourceGroup().id, 'podmi-ingress-controller', variables('keyVaultSecretsUserRole')))]"
+                "[resourceId('Microsoft.Authorization/policyAssignments', variables('policyAssignmentNameRoRootFilesystem'))]"
             ],
             "properties": {
                 "kubernetesVersion": "[parameters('kubernetesVersion')]",
@@ -1064,9 +724,9 @@
                     {
                         "name": "npsystem",
                         "count": 3,
-                        "vmSize": "Standard_DS2_v2",
+                        "vmSize": "Standard_B2s",
                         "osDiskSizeGB": 80,
-                        "osDiskType": "Ephemeral",
+                        "osDiskType": "Managed",
                         "osType": "Linux",
                         "minCount": 3,
                         "maxCount": 4,
@@ -1094,9 +754,9 @@
                     {
                         "name": "npuser01",
                         "count": 2,
-                        "vmSize": "Standard_DS3_v2",
+                        "vmSize": "Standard_B2s",
                         "osDiskSizeGB": 120,
-                        "osDiskType": "Ephemeral",
+                        "osDiskType": "Managed",
                         "osType": "Linux",
                         "minCount": 2,
                         "maxCount": 5,
@@ -1189,9 +849,9 @@
                 },
                 "apiServerAccessProfile": {
                     "authorizedIPRanges": "[parameters('clusterAuthorizedIPRanges')]",
-                    "enablePrivateCluster": false
+                    "enablePrivateCluster": true
                 },
-                "podIdentityProfile": { 
+                "podIdentityProfile": {
                     "enabled": false, /* This feature is currently in preview and will eventually replace the aad-pod-identity configuration set up by hand in this reference implementation */
                     "userAssignedIdentities": [],
                     "userAssignedIdentityExceptions": []
@@ -1264,7 +924,7 @@
                 "[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]"
             ],
             "properties": {
-                
+
                 "source": "[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]",
                 "topicType": "Microsoft.ContainerService.ManagedClusters"
             },
@@ -1934,32 +1594,32 @@
             }
         },
         {
-            "condition": "[and(variables('isUsingAzureRBACasKubernetesRBAC'), not(equals(parameters('a0008NamespaceReaderAadGroupObjectId'), parameters('clusterAdminAadGroupObjectId'))))]",
+            "condition": "[and(variables('isUsingAzureRBACasKubernetesRBAC'), not(equals(parameters('a1212NamespaceReaderAadGroupObjectId'), parameters('clusterAdminAadGroupObjectId'))))]",
             "type": "Microsoft.Authorization/roleAssignments",
             "apiVersion": "2018-09-01-preview",
-            "name": "[guid('aad-a0008-reader-group', resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), parameters('a0008NamespaceReaderAadGroupObjectId'))]",
+            "name": "[guid('aad-a1212-reader-group', resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), parameters('a1212NamespaceReaderAadGroupObjectId'))]",
             "dependsOn": [
                 "[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]"
             ],
-            "scope": "[concat('/subscriptions/', subscription().subscriptionId, '/resourcegroups/', resourceGroup().name, '/providers/Microsoft.ContainerService/managedClusters/', variables('clusterName'), '/namespaces/a0008')]",
+            "scope": "[concat('/subscriptions/', subscription().subscriptionId, '/resourcegroups/', resourceGroup().name, '/providers/Microsoft.ContainerService/managedClusters/', variables('clusterName'), '/namespaces/a1212')]",
             "properties": {
                 "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('clusterReaderRoleId'))]",
-                "principalId": "[parameters('a0008NamespaceReaderAadGroupObjectId')]",
+                "principalId": "[parameters('a1212NamespaceReaderAadGroupObjectId')]",
                 "principalType": "Group"
             }
         },
         {
-            "condition": "[and(variables('isUsingAzureRBACasKubernetesRBAC'), not(equals(parameters('a0008NamespaceReaderAadGroupObjectId'), parameters('clusterAdminAadGroupObjectId'))))]",
+            "condition": "[and(variables('isUsingAzureRBACasKubernetesRBAC'), not(equals(parameters('a1212NamespaceReaderAadGroupObjectId'), parameters('clusterAdminAadGroupObjectId'))))]",
             "type": "Microsoft.Authorization/roleAssignments",
             "apiVersion": "2018-09-01-preview",
-            "name": "[guid('aad-a0008-reader-group-sc', resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), parameters('a0008NamespaceReaderAadGroupObjectId'))]",
+            "name": "[guid('aad-a1212-reader-group-sc', resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), parameters('a1212NamespaceReaderAadGroupObjectId'))]",
             "dependsOn": [
                 "[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]"
             ],
             "scope": "[concat('Microsoft.ContainerService/managedClusters/', variables('clusterName'))]",
             "properties": {
                 "roleDefinitionId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('serviceClusterUserRoleId'))]",
-                "principalId": "[parameters('a0008NamespaceReaderAadGroupObjectId')]",
+                "principalId": "[parameters('a1212NamespaceReaderAadGroupObjectId')]",
                 "principalType": "Group"
             }
         },
@@ -2103,7 +1763,7 @@
                 "policyDefinitionId": "[variables('policyResourceIdEnforceImageSource')]",
                 "parameters": {
                     "allowedContainerImagesRegex": {
-                        "value": "[concat(variables('defaultAcrName'),'.azurecr.io/.+$|mcr.microsoft.com/.+$|docker.io/fluxcd/flux.+$|docker.io/weaveworks/kured.+$|docker.io/library/.+$')]"
+                        "value": "[concat(variables('acrName'),'.azurecr.io/.+$|mcr.microsoft.com/.+$|docker.io/fluxcd/flux.+$|docker.io/weaveworks/kured.+$|docker.io/library/.+$')]"
                     },
                     "excludedNamespaces": {
                         "value": [
@@ -2138,7 +1798,7 @@
         },
         "containerRegistryName": {
             "type": "string",
-            "value": "[variables('defaultAcrName')]"
+            "value": "[variables('acrName')]"
         }
     }
 }
