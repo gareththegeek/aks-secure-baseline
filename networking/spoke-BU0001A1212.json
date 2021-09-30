@@ -33,19 +33,15 @@
         }
     },
     "variables": {
-        "orgAppId": "BU0001A0008",
-        "clusterVNetName": "[concat('vnet-spoke-', variables('orgAppId'), '-00')]",
+        "clusterVNetName": "[concat(resourceGroup().name, 'vnet')]",
 
         "routeTableName": "[concat('route-to-', parameters('location'), '-hub-fw')]",
+        "hubSubId": "[split(parameters('hubVnetResourceId'),'/')[2]]",
         "hubRgName": "[split(parameters('hubVnetResourceId'),'/')[4]]",
         "hubNetworkName": "[split(parameters('hubVnetResourceId'),'/')[8]]",
 
-        "hubFwResourceId": "[resourceId(variables('hubRgName'), 'Microsoft.Network/azureFirewalls', concat('fw-', parameters('location')))]",
-        "hubLaWorkspaceName": "[concat('la-hub-', parameters('location'), '-', uniqueString(parameters('hubVnetResourceId')))]",
-        "hubLaWorkspaceResourceId": "[resourceId(variables('hubRgName'), 'Microsoft.OperationalInsights/workspaces', variables('hubLaWorkspaceName'))]",
-        "toHubPeeringName": "[concat('spoke-to-', variables('hubNetworkName'))]",
-
-        "primaryClusterPipName": "[concat('pip-', variables('orgAppId'), '-00')]"
+        "hubFwResourceId": "[resourceId(variables('hubSubId'), variables('hubRgName'), 'Microsoft.Network/azureFirewalls', concat('Forefront-fw-', parameters('location')))]",
+        "toHubPeeringName": "[concat('spoke-to-', variables('hubNetworkName'))]"
     },
     "resources": [
         {
@@ -75,30 +71,7 @@
             "comments": "Default NSG on the AKS nodepools. Feel free to constrict further!",
             "properties": {
                 "securityRules": []
-            },
-            "resources": [
-                {
-                    "type": "providers/diagnosticSettings",
-                    "apiVersion": "2017-05-01-preview",
-                    "name": "Microsoft.Insights/toHub",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/networkSecurityGroups', concat('nsg-', variables('clusterVNetName'), '-nodepools'))]"
-                    ],
-                    "properties": {
-                        "workspaceId": "[variables('hubLaWorkspaceResourceId')]",
-                        "logs": [
-                            {
-                                "category": "NetworkSecurityGroupEvent",
-                                "enabled": true
-                            },
-                            {
-                                "category": "NetworkSecurityGroupRuleCounter",
-                                "enabled": true
-                            }
-                        ]
-                    }
-                }
-            ]
+            }
         },
         {
             "type": "Microsoft.Network/networkSecurityGroups",
@@ -108,30 +81,7 @@
             "comments": "Default NSG on the AKS ILB subnet. Feel free to constrict further!",
             "properties": {
                 "securityRules": []
-            },
-            "resources": [
-                {
-                    "name": "Microsoft.Insights/toHub",
-                    "type": "providers/diagnosticSettings",
-                    "apiVersion": "2017-05-01-preview",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/networkSecurityGroups', concat('nsg-', variables('clusterVNetName'), '-aksilbs'))]"
-                    ],
-                    "properties": {
-                        "workspaceId": "[variables('hubLaWorkspaceResourceId')]",
-                        "logs": [
-                            {
-                                "category": "NetworkSecurityGroupEvent",
-                                "enabled": true
-                            },
-                            {
-                                "category": "NetworkSecurityGroupRuleCounter",
-                                "enabled": true
-                            }
-                        ]
-                    }
-                }
-            ]
+            }
         },
         {
             "name": "[concat('nsg-', variables('clusterVNetName'), '-appgw')]",
@@ -210,37 +160,14 @@
                         }
                     }
                 ]
-            },
-            "resources": [
-                {
-                    "name": "Microsoft.Insights/toHub",
-                    "type": "providers/diagnosticSettings",
-                    "apiVersion": "2017-05-01-preview",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/networkSecurityGroups', concat('nsg-', variables('clusterVNetName'), '-appgw'))]"
-                    ],
-                    "properties": {
-                        "workspaceId": "[variables('hubLaWorkspaceResourceId')]",
-                        "logs": [
-                            {
-                                "category": "NetworkSecurityGroupEvent",
-                                "enabled": true
-                            },
-                            {
-                                "category": "NetworkSecurityGroupRuleCounter",
-                                "enabled": true
-                            }
-                        ]
-                    }
-                }
-            ]
+            }
         },
         {
             "type": "Microsoft.Network/virtualNetworks",
             "apiVersion": "2020-05-01",
             "name": "[variables('clusterVNetName')]",
             "location": "[parameters('location')]",
-            "comments": "65,536 (-reserved) IPs available to the workload, split across two subnets for AKS and one for App Gateway.",
+            "comments": "1,022 (-reserved) IPs available to the workload, split across two subnets for AKS and one for App Gateway.",
             "dependsOn": [
                 "[resourceId('Microsoft.Network/routeTables', variables('routeTableName'))]",
                 "[resourceId('Microsoft.Network/networkSecurityGroups', concat('nsg-', variables('clusterVNetName'), '-appgw'))]",
@@ -250,14 +177,14 @@
             "properties": {
                 "addressSpace": {
                     "addressPrefixes": [
-                        "10.240.0.0/16"
+                        "10.101.8.0/22"
                     ]
                 },
                 "subnets": [
                     {
                         "name": "snet-clusternodes",
                         "properties": {
-                            "addressPrefix": "10.240.0.0/22",
+                            "addressPrefix": "10.101.8.0/24",
                             "routeTable": {
                                 "id": "[resourceId('Microsoft.Network/routeTables', variables('routeTableName'))]"
                             },
@@ -271,7 +198,7 @@
                     {
                         "name": "snet-clusteringressservices",
                         "properties": {
-                            "addressPrefix": "10.240.4.0/28",
+                            "addressPrefix": "10.101.9.0/24",
                             "routeTable": {
                                 "id": "[resourceId('Microsoft.Network/routeTables', variables('routeTableName'))]"
                             },
@@ -285,7 +212,7 @@
                     {
                         "name": "snet-applicationgateway",
                         "properties": {
-                            "addressPrefix": "10.240.4.16/28",
+                            "addressPrefix": "10.101.10.0/24",
                             "networkSecurityGroup": {
                                 "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat('nsg-', variables('clusterVNetName'), '-appgw'))]"
                             },
@@ -311,24 +238,7 @@
                         "allowForwardedTraffic": false,
                         "allowVirtualNetworkAccess": true,
                         "allowGatewayTransit": false,
-                        "useRemoteGateways": false
-                    }
-                },
-                {
-                    "type": "providers/diagnosticSettings",
-                    "apiVersion": "2017-05-01-preview",
-                    "name": "Microsoft.Insights/toHub",
-                    "dependsOn": [
-                        "[resourceId('Microsoft.Network/virtualNetworks', variables('clusterVNetName'))]"
-                    ],
-                    "properties": {
-                        "workspaceId": "[variables('hubLaWorkspaceResourceId')]",
-                        "metrics": [
-                            {
-                                "category": "AllMetrics",
-                                "enabled": true
-                            }
-                        ]
+                        "useRemoteGateways": true
                     }
                 }
             ]
@@ -338,6 +248,7 @@
             "apiVersion": "2020-06-01",
             "name": "[concat('CreateHubTo', variables('clusterVNetName'), 'Peer')]",
             "resourceGroup": "[variables('hubRgName')]",
+            "subscriptionId": "[variables('hubSubId')]",
             "comments": "Sub incremental deployment to perform hub-to-spoke peering",
             "dependsOn": [
                 "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', variables('clusterVNetName'), variables('toHubPeeringName'))]"
@@ -357,28 +268,13 @@
                                     "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('clusterVNetName'))]"
                                 },
                                 "allowForwardedTraffic": false,
-                                "allowGatewayTransit": false,
+                                "allowGatewayTransit": true,
                                 "allowVirtualNetworkAccess": true,
                                 "useRemoteGateways": false
                             }
                         }
                     ]
                 }
-            }
-        },
-        {
-            "type": "Microsoft.Network/publicIpAddresses",
-            "apiVersion": "2020-05-01",
-            "name": "[variables('primaryClusterPipName')]",
-            "location": "[parameters('location')]",
-            "comments": "Used as primary entry point for workload. Expected to be assigned to an Azure Application Gateway.",
-            "sku": {
-                "name": "Standard"
-            },
-            "properties": {
-                "publicIPAllocationMethod": "Static",
-                "idleTimeoutInMinutes": 4,
-                "publicIPAddressVersion": "IPv4"
             }
         }
     ],
@@ -390,10 +286,6 @@
         "nodepoolSubnetResourceIds": {
             "value": "[createArray(resourceId('Microsoft.Network/virtualNetworks/subnets', variables('clusterVNetName'), 'snet-clusternodes'))]",
             "type": "array"
-        },
-        "appGwPublicIpAddress": {
-            "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('primaryClusterPipName'))).ipAddress]",
-            "type": "string"
         }
     }
 }
